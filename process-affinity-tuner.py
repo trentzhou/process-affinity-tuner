@@ -22,6 +22,8 @@ class ProcessAffinityTuner(object):
     def __init__(self):
         self.selection = []
         self.cmd_map = {
+            "autobind": self.handle_autobind,
+            "fullbind": self.handle_fullbind,
             "bind": self.handle_bind,
             "exit": self.handle_exit,
             "help": self.handle_help,
@@ -72,12 +74,7 @@ class ProcessAffinityTuner(object):
             line = f.format(p.pid, affinity_str, process)
             print(line)
     
-    def handle_pgrep(self, items):
-        """
-        Search for processes with given key words
-        Usage:
-            pgrep [word...]
-        """
+    def find_processes(self, items):
         result = []
         procs = psutil.process_iter()
         for p in procs:
@@ -89,6 +86,15 @@ class ProcessAffinityTuner(object):
                     match = True
             if match:
                 result.append(p)
+        return result
+
+    def handle_pgrep(self, items):
+        """
+        Search for processes with given key words
+        Usage:
+            pgrep [word...]
+        """
+        result = self.find_processes(items)
         self.print_process_list(result, True)
         return True
         
@@ -114,18 +120,27 @@ class ProcessAffinityTuner(object):
         Usage:
             select [pid...]
         """
-        for x in items:
-            pid = int(x)
-            if psutil.pid_exists(pid):
-                self.selection.append(pid)
-        all_procs = psutil.process_iter()
-        selected_procs = [x for x in all_procs if x.pid in self.selection]
-        self.print_process_list(selected_procs)
+        result = self.find_processes(items)
+        self.print_process_list(result)
+        self.selection += result
         
         # clean up selection, delete items if they no longer exist
-        self.selection = [x for x in self.selection if psutil.pid_exists(x)]
+        self.selection = [x for x in self.selection if psutil.pid_exists(x.pid)]
         
         return True
+
+    def get_threads_for_processes(self, items):
+        result = []
+        for x in items:
+            if isinstance(x, psutil.Process):
+                pid = x.pid
+            else:
+                pid = int(x)
+            if psutil.pid_exists(pid):
+                threads = psutil.Process(pid).threads()
+                for t in threads:
+                    result.append(psutil.Process(t[0]))
+        return result
     
     def handle_threads(self, items):
         """
@@ -136,15 +151,11 @@ class ProcessAffinityTuner(object):
             
         If pid is not specified, current selection is used
         """
-        result = []
-        if not items:
-            items = self.selection
-        for x in items:
-            pid = int(x)
-            if psutil.pid_exists(pid):
-                threads = psutil.Process(pid).threads()
-                for t in threads:
-                    result.append(psutil.Process(t[0]))
+        if items:
+            procs = self.find_processes(items)
+        else:
+            procs = self.selection
+        result = self.get_threads_for_processes(procs)
         self.print_process_list(result)
         return True
     
@@ -159,6 +170,46 @@ class ProcessAffinityTuner(object):
         cpus = items[1]
         cmd = ["/usr/bin/taskset", "-pc", cpus, pid]
         subprocess.call(cmd)
+        return True
+
+    def handle_autobind(self, items):
+        """
+        Bind selected threads to CPUs evenly.
+
+        Usage:
+            autobind [process...]
+        """
+        if not items:
+            items = self.selection
+        else:
+            items = self.find_processes(items)
+        threads = self.get_threads_for_processes(items)
+        cpu_count = psutil.cpu_count()
+        cpu = 0
+        for p in threads:
+            args = [str(p.pid), str(cpu)]
+            self.handle_bind(args)
+            cpu = (cpu + 1) % cpu_count
+        return True
+
+    def handle_fullbind(self, items):
+        """
+        Bind selected threads to all CPUs.
+
+        Usage:
+            fullbind [process...]
+        """
+
+        if not items:
+            items = self.selection
+        else:
+            items = self.find_processes(items)
+        threads = self.get_threads_for_processes(items)
+        cpu_count = psutil.cpu_count()
+        cpus = ','.join(str(x) for x in range(cpu_count))
+        for p in threads:
+            args = [str(p.pid), cpus]
+            self.handle_bind(args)
         return True
             
     def run(self):

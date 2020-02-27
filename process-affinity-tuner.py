@@ -9,6 +9,7 @@ import psutil
 import readline
 import shlex
 import subprocess
+import re
 
 def list_active_processes():
     """
@@ -34,7 +35,19 @@ class ProcessAffinityTuner(object):
             "select": self.handle_select,
             "threads": self.handle_threads,
         }
+        self.numa_settings = {}
+        self.get_numa_settings()
         
+    def get_numa_settings(self):
+        regex = re.compile(r'node (\d) cpus: (.*)')
+        lines = subprocess.check_output("numactl --hardware", shell=True).decode()
+        for line in lines.split("\n"):
+            m = regex.match(line)
+            if m:
+                node_id, cpus = m.groups()
+                cpus_ary = cpus.strip().split(" ")
+                self.numa_settings[node_id] = cpus_ary
+
     def handle_help(self, items):
         """
         Show usage.
@@ -121,11 +134,11 @@ class ProcessAffinityTuner(object):
             select [pid...]
         """
         result = self.find_processes(items)
-        self.print_process_list(result)
         self.selection += result
         
         # clean up selection, delete items if they no longer exist
         self.selection = [x for x in self.selection if psutil.pid_exists(x.pid)]
+        self.print_process_list(result)
         
         return True
 
@@ -185,9 +198,12 @@ class ProcessAffinityTuner(object):
             items = self.find_processes(items)
         threads = self.get_threads_for_processes(items)
         cpu_count = psutil.cpu_count()
+        cpus = []
+        for s in sorted(self.numa_settings.values()):
+            cpus += s
         cpu = 0
         for p in threads:
-            args = [str(p.pid), str(cpu)]
+            args = [str(p.pid), str(cpus[cpu])]
             self.handle_bind(args)
             cpu = (cpu + 1) % cpu_count
         return True

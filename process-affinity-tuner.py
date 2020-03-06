@@ -133,12 +133,13 @@ class ProcessAffinityTuner(object):
         Usage:
             select [pid...]
         """
-        result = self.find_processes(items)
-        self.selection += result
-        
+        if items:
+            result = self.find_processes(items)
+            self.selection += result
+            
         # clean up selection, delete items if they no longer exist
         self.selection = [x for x in self.selection if psutil.pid_exists(x.pid)]
-        self.print_process_list(result)
+        self.print_process_list(self.selection)
         
         return True
 
